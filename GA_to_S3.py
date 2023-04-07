@@ -12,7 +12,7 @@ import pandas as pd
 default_args = {
     'owner': 'airflow',
     'depends_on_past': False,
-    'start_date': datetime(2023, 4, 1),
+    'start_date': datetime(2023, 4, 7),
     'email_on_failure': False,
     'email_on_retry': False,
     'retries': 1,
@@ -30,18 +30,18 @@ dag = DAG(
 def retrieve_data(**kwargs):
     start_date = datetime.utcnow() - timedelta(days=1)
     end_date = datetime.utcnow()
-    google_analytics_conn = BaseHook.get_connection('google_analytics_default')
+    google_analytics_conn = BaseHook.get_connection(conn_id='google_analytics_default')
     key_path = google_analytics_conn.extra_dejson.get('key_path')
-    view_id = google_analytics_conn.extra_dejson.get('view_id')
-    scopes = 'https://www.googleapis.com/auth/analytics.readonly'
+    view_id = '188650309'
 
-    credentials = service_account.Credentials.from_service_account_file(key_path, scopes)
+    credentials = service_account.Credentials.from_service_account_file(key_path,  scopes=[u'https://www.googleapis.com/auth/analytics.readonly'])
     analytics = build('analyticsreporting', 'v4', credentials=credentials)
 
     response = analytics.reports().batchGet(
       body={
            'reportRequests': [
                 {
+        'dateRanges': [{'startDate':  start_date.strftime('%Y-%m-%d'), 'endDate':  end_date.strftime('%Y-%m-%d')}],
         'viewId': view_id,
         'source' : 'ga',
         'report_type' :'video_events',
@@ -62,6 +62,7 @@ def retrieve_data(**kwargs):
         }]
       }
 ).execute()
+    print(response)
 
  
     rows = response['reports'][0]['data']['rows']
@@ -77,6 +78,7 @@ def retrieve_data(**kwargs):
     logging.info('Data retrieved successfully.')
 
 
+#This function saves processed data to an S3 bucket.
 def save_to_s3(**kwargs):
     s3_hook = S3Hook(aws_conn_id='aws_default')
     task_instance = kwargs['ti']
@@ -86,7 +88,7 @@ def save_to_s3(**kwargs):
     file_name = f"{'source'}/{'report_name'}/{year}/{month}/{current_time.strftime('%d_%H%M%S')}.csv"
     data = task_instance.xcom_pull(task_ids='retrieve_data', key='google_analytics_report')
     s3_hook.load_string(
-        data=data.to_csv(index=False), 
+        data=data, 
         key=file_name, 
         bucket_name='mygoogleanalytics', 
         replace=True
